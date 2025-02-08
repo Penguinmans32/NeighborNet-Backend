@@ -11,6 +11,11 @@ import com.example.neighbornetbackend.security.JwtTokenProvider;
 import com.example.neighbornetbackend.service.EmailService;
 import com.example.neighbornetbackend.service.EmailVerificationService;
 import com.example.neighbornetbackend.service.RefreshTokenService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import jakarta.mail.MessagingException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -50,6 +55,10 @@ public class AuthController {
         this.emailService = emailService;
     }
 
+    @Operation(
+            summary = "Verify Email",
+            description = "Verify user's email address using verification token"
+    )
     @GetMapping("/verify-email")
     public ResponseEntity<?> verifyEmail(@RequestParam String token) {
         try {
@@ -60,6 +69,21 @@ public class AuthController {
         }
     }
 
+
+    @Operation(
+            summary = "Register new user",
+            description = "Create a new user account"
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "User successfully registered"
+            ),
+            @ApiResponse(
+                    responseCode = "400",
+                    description = "Username/Email already exists"
+            )
+    })
     @PostMapping("/signup")
     public ResponseEntity<?> registerUser(@RequestBody SignupRequest signupRequest) {
         if(userRepository.existsByUsername(signupRequest.getUsername())) {
@@ -88,6 +112,21 @@ public class AuthController {
         }
     }
 
+    @Operation(
+            summary = "Login User",
+            description = "Authenticate a user and return JWT token"
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Sucessfully authenticated",
+                    content = @Content(schema = @Schema(implementation = AuthResponse.class))
+            ),
+            @ApiResponse(
+                    responseCode = "401",
+                    description = "Invalid credentials"
+            )
+    })
     @PostMapping("/login")
     @Transactional
     public ResponseEntity<?> authenticateUser(@RequestBody LoginRequest loginRequest) {
