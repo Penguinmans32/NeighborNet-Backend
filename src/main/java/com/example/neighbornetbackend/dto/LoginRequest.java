@@ -2,6 +2,7 @@ package com.example.neighbornetbackend.dto;
 
 
 public class LoginRequest {
+
     private String username;
     private String password;
 

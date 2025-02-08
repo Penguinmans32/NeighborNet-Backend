@@ -8,20 +8,26 @@ import com.example.neighbornetbackend.model.User;
 import com.example.neighbornetbackend.repository.UserRepository;
 import com.example.neighbornetbackend.security.CustomUserDetails;
 import com.example.neighbornetbackend.security.JwtTokenProvider;
+import com.example.neighbornetbackend.service.EmailService;
+import com.example.neighbornetbackend.service.EmailVerificationService;
 import com.example.neighbornetbackend.service.RefreshTokenService;
+import jakarta.mail.MessagingException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
+@CrossOrigin
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -31,13 +37,27 @@ public class AuthController {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider tokenProvider;
     private final RefreshTokenService refreshTokenService;
+    private final EmailVerificationService emailVerificationService;
+    private final EmailService emailService;
 
-    public AuthController(AuthenticationManager authenticationManager, UserRepository userRepository, PasswordEncoder passwordEncoder, JwtTokenProvider tokenProvider, RefreshTokenService refreshTokenService) {
+    public AuthController(AuthenticationManager authenticationManager, UserRepository userRepository, PasswordEncoder passwordEncoder, JwtTokenProvider tokenProvider, RefreshTokenService refreshTokenService, EmailVerificationService emailVerificationService, EmailService emailService) {
         this.authenticationManager = authenticationManager;
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.tokenProvider = tokenProvider;
         this.refreshTokenService = refreshTokenService;
+        this.emailVerificationService = emailVerificationService;
+        this.emailService = emailService;
+    }
+
+    @GetMapping("/verify-email")
+    public ResponseEntity<?> verifyEmail(@RequestParam String token) {
+        try {
+            emailVerificationService.verifyEmail(token);
+            return ResponseEntity.ok("Email verified successfully!");
+        } catch (RuntimeException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
     }
 
     @PostMapping("/signup")
@@ -53,16 +73,38 @@ public class AuthController {
         user.setUsername(signupRequest.getUsername());
         user.setEmail(signupRequest.getEmail());
         user.setPassword(passwordEncoder.encode(signupRequest.getPassword()));
+        user.setEmailVerified(false);
 
         userRepository.save(user);
 
-        return ResponseEntity.ok("User registered successfully!");
+        // Create verification token and send email
+        String token = emailVerificationService.createVerificationToken(user);
+        try {
+            emailService.sendVerificationEmail(user.getEmail(), token);
+            return ResponseEntity.ok("User registered successfully! Please check your email to verify your account.");
+        } catch (MessagingException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("User registered but failed to send verification email.");
+        }
     }
 
     @PostMapping("/login")
+    @Transactional
     public ResponseEntity<?> authenticateUser(@RequestBody LoginRequest loginRequest) {
+
+        User user = userRepository.findByUsernameOrEmail(loginRequest.getUsername(), loginRequest.getUsername())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if(!user.isEmailVerified()) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body("Please verify your email before loggin in.");
+        }
+
         Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(loginRequest.getUsername(), loginRequest.getPassword())
+                new UsernamePasswordAuthenticationToken(
+                        loginRequest.getUsername(),
+                        loginRequest.getPassword()
+                )
         );
 
         SecurityContextHolder.getContext().setAuthentication(authentication);
@@ -70,10 +112,13 @@ public class AuthController {
 
         CustomUserDetails userDetails = (CustomUserDetails) authentication.getPrincipal();
 
+        refreshTokenService.invalidateAllUserTokens(userDetails.getUser().getId());
+
         long activeTokens = refreshTokenService.countActiveTokensForUser(userDetails.getUser().getId());
         if (activeTokens > 5) {
             refreshTokenService.invalidateAllUserTokens(userDetails.getUser().getId());
         }
+
         RefreshToken refreshToken = refreshTokenService.createRefreshToken(userDetails.getUser().getId());
 
         return ResponseEntity.ok(new AuthResponse(jwt,
