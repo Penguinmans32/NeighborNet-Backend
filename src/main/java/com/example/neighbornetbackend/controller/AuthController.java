@@ -6,8 +6,10 @@ import com.example.neighbornetbackend.exception.TokenRefreshException;
 import com.example.neighbornetbackend.model.RefreshToken;
 import com.example.neighbornetbackend.model.User;
 import com.example.neighbornetbackend.repository.UserRepository;
+import com.example.neighbornetbackend.security.CurrentUser;
 import com.example.neighbornetbackend.security.CustomUserDetails;
 import com.example.neighbornetbackend.security.JwtTokenProvider;
+import com.example.neighbornetbackend.security.UserPrincipal;
 import com.example.neighbornetbackend.service.EmailService;
 import com.example.neighbornetbackend.service.EmailVerificationService;
 import com.example.neighbornetbackend.service.RefreshTokenService;
@@ -22,15 +24,17 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @CrossOrigin
 @RestController
@@ -212,5 +216,56 @@ public class AuthController {
                 })
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND)
                         .body(Collections.singletonMap("message", "Token not found")));
+    }
+
+    @GetMapping("/user")
+    public ResponseEntity<?> getCurrentUser(@CurrentUser UserPrincipal userPrincipal) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        Map<String, Object> userData = new HashMap<>();
+
+        if (authentication != null && authentication.getPrincipal() != null) {
+            if (authentication.getPrincipal() instanceof UserPrincipal) {
+                // Regular authentication
+                userData.put("id", userPrincipal.getId());
+                userData.put("username", userPrincipal.getUsername());
+                userData.put("email", userPrincipal.getEmail());
+                userData.put("role", userPrincipal.getAuthorities().stream()
+                        .map(GrantedAuthority::getAuthority)
+                        .collect(Collectors.toList()));
+            } else if (authentication.getPrincipal() instanceof OAuth2User) {
+                OAuth2User oauth2User = (OAuth2User) authentication.getPrincipal();
+                Map<String, Object> attributes = oauth2User.getAttributes();
+
+                String email = (String) attributes.get("mail");
+                if (email == null) {
+                    email = (String) attributes.get("userPrincipalName");
+                }
+
+                String name = (String) attributes.get("displayName");
+                if (name == null) {
+                    name = (String) attributes.get("givenName");
+                }
+
+                String finalEmail = email;
+                String finalName = name;
+                User user = userRepository.findByEmail(email)
+                        .orElseGet(() -> {
+                            User newUser = new User();
+                            newUser.setEmail(finalEmail);
+                            newUser.setUsername(finalName);
+                            newUser.setEmailVerified(true);
+                            return userRepository.save(newUser);
+                        });
+
+                userData.put("id", user.getId());
+                userData.put("username", name);
+                userData.put("email", email);
+                userData.put("role", Collections.singletonList("ROLE_USER"));
+                userData.put("provider", "microsoft");
+            }
+            return ResponseEntity.ok(userData);
+        }
+
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
     }
 }
