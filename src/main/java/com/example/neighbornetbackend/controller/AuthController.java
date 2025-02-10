@@ -134,40 +134,46 @@ public class AuthController {
     @PostMapping("/login")
     @Transactional
     public ResponseEntity<?> authenticateUser(@RequestBody LoginRequest loginRequest) {
+        try {
+            User user = userRepository.findByUsernameOrEmail(loginRequest.getUsername(), loginRequest.getUsername())
+                    .orElseThrow(() -> new RuntimeException("User not found"));
 
-        User user = userRepository.findByUsernameOrEmail(loginRequest.getUsername(), loginRequest.getUsername())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+            if (!user.isEmailVerified()) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body("Please verify your email before logging in.");
+            }
 
-        if(!user.isEmailVerified()) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body("Please verify your email before loggin in.");
+            Authentication authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(
+                            loginRequest.getUsername(),
+                            loginRequest.getPassword()
+                    )
+            );
+
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+            String jwt = tokenProvider.generateToken(authentication);
+
+            UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+
+            refreshTokenService.invalidateAllUserTokens(user.getId());
+
+            long activeTokens = refreshTokenService.countActiveTokensForUser(user.getId());
+            if (activeTokens > 5) {
+                refreshTokenService.invalidateAllUserTokens(user.getId());
+            }
+
+            RefreshToken refreshToken = refreshTokenService.createRefreshToken(user.getId());
+
+            return ResponseEntity.ok(new AuthResponse(
+                    jwt,
+                    refreshToken.getToken(),
+                    "Bearer",
+                    user.getUsername()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest()
+                    .body(new MessageResponse("Invalid username or password"));
         }
-
-        Authentication authentication = authenticationManager.authenticate(
-                new UsernamePasswordAuthenticationToken(
-                        loginRequest.getUsername(),
-                        loginRequest.getPassword()
-                )
-        );
-
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-        String jwt = tokenProvider.generateToken(authentication);
-
-        CustomUserDetails userDetails = (CustomUserDetails) authentication.getPrincipal();
-
-        refreshTokenService.invalidateAllUserTokens(userDetails.getUser().getId());
-
-        long activeTokens = refreshTokenService.countActiveTokensForUser(userDetails.getUser().getId());
-        if (activeTokens > 5) {
-            refreshTokenService.invalidateAllUserTokens(userDetails.getUser().getId());
-        }
-
-        RefreshToken refreshToken = refreshTokenService.createRefreshToken(userDetails.getUser().getId());
-
-        return ResponseEntity.ok(new AuthResponse(jwt,
-                refreshToken.getToken(),
-                "Bearer",
-                userDetails.getUsername()));
     }
 
     @PostMapping("/refreshtoken")
@@ -225,7 +231,6 @@ public class AuthController {
 
         if (authentication != null && authentication.getPrincipal() != null) {
             if (authentication.getPrincipal() instanceof UserPrincipal) {
-                // Regular authentication
                 userData.put("id", userPrincipal.getId());
                 userData.put("username", userPrincipal.getUsername());
                 userData.put("email", userPrincipal.getEmail());
