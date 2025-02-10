@@ -1,6 +1,7 @@
 package com.example.neighbornetbackend.security;
 
 
+import com.example.neighbornetbackend.service.CustomOAuth2UserService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
@@ -12,12 +13,17 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.security.Key;
 import java.util.Date;
+import java.util.Map;
 
 @Component
 public class JwtTokenProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(CustomOAuth2UserService.class);
 
     @Value("${jwt.secret}")
     private String jwtSecret;
@@ -35,14 +41,28 @@ public class JwtTokenProvider {
     public String generateToken(Authentication authentication) {
         String username;
 
-        if (authentication.getPrincipal() instanceof UserDetails) {
-            username = ((UserDetails) authentication.getPrincipal()).getUsername();
-        } else if (authentication.getPrincipal() instanceof OidcUser) {
-            OidcUser oidcUser = (OidcUser) authentication.getPrincipal();
-            username = oidcUser.getEmail(); // or oidcUser.getName() depending on your needs
+        if (authentication.getPrincipal() instanceof UserPrincipal) {
+            UserPrincipal userPrincipal = (UserPrincipal) authentication.getPrincipal();
+            username = userPrincipal.getEmail();
+            log.info("Generating token for UserPrincipal with email: {}", username);
         } else if (authentication.getPrincipal() instanceof OAuth2User) {
             OAuth2User oauth2User = (OAuth2User) authentication.getPrincipal();
-            username = oauth2User.getAttribute("email"); // or other attribute that identifies the user
+            Map<String, Object> attributes = oauth2User.getAttributes();
+            log.info("OAuth2User attributes: {}", attributes);
+
+            username = (String) attributes.get("mail");  // Try Microsoft specific first
+            if (username == null) {
+                username = (String) attributes.get("email");  // Try standard
+            }
+            if (username == null) {
+                username = (String) attributes.get("userPrincipalName");  // Try Microsoft fallback
+            }
+
+            if (username == null) {
+                throw new IllegalStateException("Could not find email in OAuth2 user attributes");
+            }
+
+            log.info("Generating token for OAuth2User with email: {}", username);
         } else {
             throw new IllegalArgumentException("Unsupported principal type: " +
                     authentication.getPrincipal().getClass());
@@ -65,7 +85,10 @@ public class JwtTokenProvider {
                 .build()
                 .parseClaimsJws(token)
                 .getBody();
-        return claims.getSubject();
+
+        String username = claims.getSubject();
+        log.info("Extracted username from token: {}", username);
+        return username;
     }
 
     public boolean validateToken(String token) {
@@ -73,6 +96,7 @@ public class JwtTokenProvider {
             Jwts.parserBuilder().setSigningKey(key).build().parseClaimsJws(token);
             return true;
         } catch (JwtException | IllegalArgumentException e) {
+            log.error("Invalid JWT token: {}", e.getMessage());
             return false;
         }
     }

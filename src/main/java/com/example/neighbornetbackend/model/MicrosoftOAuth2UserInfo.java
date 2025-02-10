@@ -10,18 +10,27 @@ public class MicrosoftOAuth2UserInfo extends OAuth2UserInfo {
 
     @Override
     public String getId() {
-        return (String) attributes.get("id");
+        return (String) attributes.get("sub");
     }
 
-    @Override
-    public String getName() {
-        return (String) attributes.get("displayName");
-    }
+   @Override
+   public String getName() {
+        String displayName = (String) attributes.get("displayName");
+        if (displayName != null) return displayName;
+
+        String givenName = (String) attributes.get("givenName");
+        String surname = (String) attributes.get("surname");
+        if(givenName != null && surname != null) {
+            return givenName + " " + surname;
+        }
+        return (String) attributes.get("userPrincipalName");
+   }
 
     @Override
     public String getEmail() {
-        return (String) attributes.getOrDefault("mail",
-                attributes.getOrDefault("userPrincipalName", null));
+        String mail = (String) attributes.get("mail");
+        if (mail != null) return mail;
+        return (String) attributes.get("userPrincipalName");
     }
 
     @Override
